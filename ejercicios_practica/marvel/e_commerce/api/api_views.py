@@ -16,7 +16,7 @@ from rest_framework.generics import (
     RetrieveUpdateAPIView,
     DestroyAPIView,
     GenericAPIView,
-    UpdatedAPIView,
+    UpdateAPIView,
 )
 from rest_framework.views import APIView
 # Importamos librerías para gestionar los permisos de acceso a nuestras APIs
@@ -31,9 +31,17 @@ from rest_framework.renderers import JSONRenderer
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+# NOTE: Importamos este decorador para poder customizar los 
+# parámetros y responses en Swagger, para aquellas
+# vistas de API basadas en funciones y basadas en Clases 
+# que no tengan definido por defecto los métodos HTTP.
+from drf_yasg.utils import swagger_auto_schema
+from drf_yasg import openapi
+
 from e_commerce.api.serializers import *
 from e_commerce.models import Comic, WishList
 
+from django.db.models import Subquery
 
 mensaje_headder = '''
 Class API View
@@ -258,6 +266,55 @@ class LoginUserAPIView(APIView):
     authentication_classes = ()
     permission_classes = ()
 
+    @swagger_auto_schema(
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT, 
+            properties={
+                'username': openapi.Schema(
+                    type=openapi.TYPE_STRING,
+                    description='username'
+                ),
+                'password': openapi.Schema(
+                    type=openapi.TYPE_STRING,
+                    format=openapi.FORMAT_PASSWORD,
+                    description='password'
+                ),
+            }
+        ),
+        responses= {
+            "201": openapi.Response(
+                description='Token: api-key',
+                examples={
+                    "application/json": {
+                        "user": {
+                            "id": 1,
+                            "last_login": "2023-01-21T20:45:49.915124Z",
+                            "is_superuser": True,
+                            "username": "root",
+                            "first_name": "first_name",
+                            "last_name": "last_name",
+                            "email": "info@inove.com.ar",
+                            "is_staff": True,
+                            "is_active": True,
+                            "date_joined": "2023-01-21T20:45:37.572526Z",
+                            "groups": [],
+                            "user_permissions": []
+                        },              
+                        "token": "2c9dc08814ad3354bcd924a1ca70edef4032efc5"
+                    }
+                }
+            ),
+           "400": openapi.Response(
+                description='Credenciales Inválidas',
+                examples={
+                    "application/json": {
+                        'error': 'Invalid Credentials'
+                    }
+                }
+            ),
+        }
+    )
+
     def post(self, request):
         # Realizamos validaciones a través del serializador
         user_login_serializer = UserLoginSerializer(data=request.data)
@@ -288,3 +345,68 @@ class LoginUserAPIView(APIView):
 # que permitan realizar un CRUD del modelo de wish-list.
 # TODO: Crear una vista generica modificada(vistas de API basadas en clases)
 # para traer todos los comics que tiene un usuario.
+
+class GetWishListAPIView(ListAPIView):
+    queryset = WishList.objects.all()
+    serializer_class = WishListSerializer
+    permission_classes = (IsAuthenticated & IsAdminUser,)
+
+class PostWishListAPIView(CreateAPIView):
+    queryset = WishList.objects.all()
+    serializer_class = WishListSerializer
+    permission_classes = (IsAuthenticated,)
+
+class UpdateWishListAPIView(UpdateAPIView):
+    queryset = WishList.objects.all()
+    serializer_class = WishListSerializer
+    permission_classes = (IsAuthenticated,)
+    lookup_field = 'comic_id'
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        return queryset.filter(user=self.request.user)
+    
+    def put(self, request, *args, **kwargs):
+        instancia_nueva = self.get_serializer(
+            instance = self.get_object(),
+            data = self.request.data,
+            partial = True
+        )
+        instancia_nueva.is_valid(raise_exception = True)
+        instancia_nueva.save()
+
+        return Response(data = instancia_nueva.data, status=status.HTTP_200_OK)
+    
+class DeleteWishListAPIView(DestroyAPIView):
+    queryset = WishList.objects.all()
+    serializer_class = WishListSerializer
+    permission_classes = (IsAuthenticated,)
+    lookup_field = 'comic_id'
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        return queryset.filter(user=self.request.user)
+
+
+
+class GetUserFavsAPIView(ListAPIView):
+    serializer_class = ComicSerializer
+    permission_classes = (IsAuthenticated,)
+
+    def get_queryset(self):
+        username = self.kwargs.get('username')
+
+        user_comics = WishList.objects.filter(
+            user__username = username
+        ).values('comic')
+
+        # Usando '__' (doble guion bajo) para buscar un campo
+        # (atributo) de un modelo en una query hecha sobre otro
+        # modelo. Así filtro los comic-id que estan presentes en
+        # (__in) la query previa hecha sobre el modelo WishList
+
+        queryset = Comic.objects.filter(
+            id__in = Subquery(user_comics)
+        )
+
+        return queryset
